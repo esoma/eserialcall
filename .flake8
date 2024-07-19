@@ -1,0 +1,28 @@
+[flake8]
+max-line-length = 99
+ignore = E, F, W, T
+    # at least two spaces before inline comment
+    E261
+    # whitespace before ':'
+    E203
+    # ambiguous variable name
+    E741
+per-file-ignores =
+     # flake8 is unable to detect array usage
+    test/test_vector.py:F401
+    test/test_matrix.py:F401
+    test/test_quaternion.py:F401
+select =
+    F401 # module imported but unused
+    E111 # indentation is not a multiple of four
+    E2   # whitespace
+    E501 # line too long
+    E7   # statements
+    W1   # indentation warning
+    W2   # whitespace warning
+    W3   # blank line warning
+    W504 # line break after binary operator
+    W505 # doc line too long
+    T100 # Fixme found
+    T101 # Todo found
+    T102 # XXX found

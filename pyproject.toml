@@ -1,0 +1,16 @@
+[tool.poetry]
+name = "eserialcall"
+version = "0.1.0"
+description = "Python Call Serialization"
+authors = ["Erik Soma <stillusingirc@gmail.com>"]
+
+[tool.poetry.dependencies]
+python = "^3.12"
+
+[tool.poetry.group.dev.dependencies]
+pytest = "7.4.3"
+pytest-cov = "4.1.0"
+
+[build-system]
+requires = ["poetry-core", "setuptools==69.0.2"]
+build-backend = "poetry.core.masonry.api"

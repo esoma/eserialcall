@@ -1,0 +1,30 @@
+repos:
+- hooks:
+  - id: trailing-whitespace
+  repo: https://github.com/pre-commit/pre-commit-hooks
+  rev: v4.4.0
+- hooks:
+  - id: isort
+  repo: https://github.com/pycqa/isort
+  rev: 5.12.0
+- hooks:
+  - args:
+    - --line-length
+    - '99'
+    id: black
+    language_version: python3.12
+  repo: https://github.com/psf/black-pre-commit-mirror
+  rev: 23.10.1
+- hooks:
+  - additional_dependencies:
+    - flake8-fixme==1.1.1
+    id: flake8
+  repo: https://github.com/pycqa/flake8
+  rev: 6.1.0
+- hooks:
+  - additional_dependencies: []
+    args: []
+    id: mypy
+    exclude: ^(test|examples)/.*
+  repo: https://github.com/pre-commit/mirrors-mypy
+  rev: v1.6.1
