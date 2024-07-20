@@ -1,7 +1,9 @@
 # eevent
+from eserialcall import Channel
 from eserialcall import Schema
 from eserialcall import Transport
 from eserialcall import connect
+from eserialcall._rpc import _Rpc
 
 # pytest
 import pytest
@@ -10,6 +12,8 @@ import pytest
 import asyncio
 import logging
 from unittest.mock import MagicMock
+
+ordered_guaranteed_channel = Channel(ordered=True, guaranteed=True, name="test")
 
 
 @pytest.fixture
@@ -57,9 +61,13 @@ def schema2(transports_and_schemas):
     return transports_and_schemas[3]
 
 
-def test_add_remove_peer(event_loop, transport1, transport2, schema1, schema2):
+@pytest.mark.parametrize("rpc_ids", [0, 10])
+def test_add_remove_peer(event_loop, transport1, transport2, schema1, schema2, rpc_ids):
     peer1 = MagicMock()
     peer2 = MagicMock()
+
+    schema1._rpc_ids = {str(i): None for i in range(rpc_ids)}
+    schema2._rpc_ids = {str(i): None for i in reversed(range(rpc_ids))}
 
     transport1.other_peer[peer1] = peer2
     transport2.other_peer[peer2] = peer1
@@ -69,11 +77,17 @@ def test_add_remove_peer(event_loop, transport1, transport2, schema1, schema2):
     event_loop.run_until_complete(asyncio.wait((t1, t2), return_when=asyncio.ALL_COMPLETED))
 
     assert schema1._peer_connections[peer1].ingress_ready.is_set()
-    assert schema1._peer_connections[peer1].ingress_map == {}
+    assert schema1._peer_connections[peer1].ingress_rpcs == dict(
+        enumerate(schema2._rpc_ids.keys())
+    )
+    assert schema1._peer_connections[peer1].egress_rpcs == dict(enumerate(schema1._rpc_ids.keys()))
     assert schema1._peer_connections[peer1].egress_ready.is_set()
 
     assert schema2._peer_connections[peer2].ingress_ready.is_set()
-    assert schema2._peer_connections[peer2].ingress_map == {}
+    assert schema2._peer_connections[peer2].ingress_rpcs == dict(
+        enumerate(schema1._rpc_ids.keys())
+    )
+    assert schema2._peer_connections[peer2].egress_rpcs == dict(enumerate(schema2._rpc_ids.keys()))
     assert schema2._peer_connections[peer2].egress_ready.is_set()
 
     t1 = event_loop.create_task(asyncio.wait_for(transport1.remove_peer(peer1), timeout=1))
@@ -94,35 +108,35 @@ def test_add_remove_peer(event_loop, transport1, transport2, schema1, schema2):
         (b"[]", "ignoring corrupt payload: is not a dictionary"),
         (b"null", "ignoring corrupt payload: is not a dictionary"),
         (b'"hello"', "ignoring corrupt payload: is not a dictionary"),
-        (b"{}", "ignoring corrupt payload: egress_map not found"),
-        (b'{"egress_map": 1}', "ignoring corrupt payload: egress_map is not a dictionary"),
-        (b'{"egress_map": 1.1}', "ignoring corrupt payload: egress_map is not a dictionary"),
-        (b'{"egress_map": []}', "ignoring corrupt payload: egress_map is not a dictionary"),
-        (b'{"egress_map": null}', "ignoring corrupt payload: egress_map is not a dictionary"),
-        (b'{"egress_map": "hello"}', "ignoring corrupt payload: egress_map is not a dictionary"),
+        (b"{}", "ignoring corrupt payload: rpcs not found"),
+        (b'{"rpcs": 1}', "ignoring corrupt payload: rpcs is not a dictionary"),
+        (b'{"rpcs": 1.1}', "ignoring corrupt payload: rpcs is not a dictionary"),
+        (b'{"rpcs": []}', "ignoring corrupt payload: rpcs is not a dictionary"),
+        (b'{"rpcs": null}', "ignoring corrupt payload: rpcs is not a dictionary"),
+        (b'{"rpcs": "hello"}', "ignoring corrupt payload: rpcs is not a dictionary"),
         (
-            b'{"egress_map": {"hello": ""}}',
-            "ignoring corrupt payload: egress_map value is not an integer",
+            b'{"rpcs": {"hello": ""}}',
+            "ignoring corrupt payload: rpcs value is not an integer",
         ),
         (
-            b'{"egress_map": {"hello": null}}',
-            "ignoring corrupt payload: egress_map value is not an integer",
+            b'{"rpcs": {"hello": null}}',
+            "ignoring corrupt payload: rpcs value is not an integer",
         ),
         (
-            b'{"egress_map": {"hello": 1.1}}',
-            "ignoring corrupt payload: egress_map value is not an integer",
+            b'{"rpcs": {"hello": 1.1}}',
+            "ignoring corrupt payload: rpcs value is not an integer",
         ),
         (
-            b'{"egress_map": {"hello": false}}',
-            "ignoring corrupt payload: egress_map value is not an integer",
+            b'{"rpcs": {"hello": false}}',
+            "ignoring corrupt payload: rpcs value is not an integer",
         ),
         (
-            b'{"egress_map": {"hello": []}}',
-            "ignoring corrupt payload: egress_map value is not an integer",
+            b'{"rpcs": {"hello": []}}',
+            "ignoring corrupt payload: rpcs value is not an integer",
         ),
         (
-            b'{"egress_map": {"hello": {}}}',
-            "ignoring corrupt payload: egress_map value is not an integer",
+            b'{"rpcs": {"hello": {}}}',
+            "ignoring corrupt payload: rpcs value is not an integer",
         ),
     ],
 )
@@ -142,11 +156,13 @@ def test_add_peer_bad_preamble(
     event_loop.run_until_complete(asyncio.wait((t1, t2), return_when=asyncio.ALL_COMPLETED))
 
     assert schema1._peer_connections[peer1].ingress_ready.is_set()
-    assert schema1._peer_connections[peer1].ingress_map == {}
+    assert schema1._peer_connections[peer1].ingress_rpcs == {}
+    assert schema1._peer_connections[peer1].egress_rpcs == {}
     assert not schema1._peer_connections[peer1].egress_ready.is_set()
 
     assert not schema2._peer_connections[peer2].ingress_ready.is_set()
-    assert schema2._peer_connections[peer2].ingress_map == {}
+    assert schema2._peer_connections[peer2].ingress_rpcs == {}
+    assert schema2._peer_connections[peer2].egress_rpcs == {}
     assert not schema2._peer_connections[peer2].egress_ready.is_set()
 
     assert caplog.record_tuples == [
@@ -160,3 +176,38 @@ def test_add_peer_bad_preamble(
 
     assert peer1 not in schema1._peer_connections
     assert peer2 not in schema2._peer_connections
+
+
+def test_register(schema1, schema2):
+    @schema1.register()
+    def func():
+        pass
+
+    assert schema1._rpc_ids[func._id] is func
+    assert not schema2._rpc_ids
+
+
+@pytest.mark.parametrize(
+    "rpc_kwargs, channel, local",
+    [
+        ({}, None, False),
+        ({"channel": None}, None, False),
+        ({"channel": ordered_guaranteed_channel}, ordered_guaranteed_channel, False),
+        ({"local": False}, None, False),
+        ({"local": True}, None, True),
+    ],
+)
+def test_register_func(schema1, rpc_kwargs, channel, local):
+    def _():
+        pass
+
+    registered = schema1.register(**rpc_kwargs)(_)
+    assert isinstance(registered, _Rpc)
+    assert registered._id == _.__qualname__
+    assert registered._callback is _
+    assert registered._channel is channel
+    assert registered._local == local
+
+    with pytest.raises(RuntimeError) as excinfo:
+        schema1.register()(_)
+    assert str(excinfo.value) == f"{_.__qualname__} already registered"

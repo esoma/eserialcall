@@ -14,15 +14,22 @@ from collections.abc import Hashable
 from contextlib import contextmanager
 import json
 from logging import getLogger
+from typing import Awaitable
+from typing import Callable
 from typing import Final
 from typing import Generator
+from typing import Generic
+from typing import Iterable
 from typing import Mapping
+from typing import ParamSpec
 from typing import Sequence
 from typing import TypeAlias
 
 Peer: TypeAlias = Hashable
 
 log = getLogger("eserialcall")
+
+_P = ParamSpec("_P")
 
 
 class Transport(ABC):
@@ -50,14 +57,14 @@ class Transport(ABC):
 class Schema:
     _PREAMBLE_ACK: Final = b""
     _transport: Transport | None = None
-    _peer_connections: dict[Peer, _PeerConnection]
 
     def __init__(self) -> None:
-        self._peer_connections = {}
+        self._peer_connections: dict[Peer, _PeerConnection] = {}
+        self._rpc_ids: dict[str, _Rpc] = {}
 
     async def _add_peer(self, peer: Peer) -> None:
         assert self._transport is not None
-        connection = _PeerConnection(self)
+        connection = _PeerConnection(self, self._rpc_ids.keys())
         self._peer_connections[peer] = connection
         await self._transport.send(ESERIALCALL_CHANNEL, connection.emit_preamble(), [peer])
         await connection.ingress_ready.wait()
@@ -82,6 +89,14 @@ class Schema:
         connection = self._peer_connections[peer]
         assert connection.ingress_ready.is_set()
 
+    def register(self, *, channel: Channel | None = None, local: bool = False) -> _SchemaRegister:
+        return _SchemaRegister(self, channel, local)
+
+    def _register_rpc(self, id: str, rpc: _Rpc) -> None:
+        if id in self._rpc_ids:
+            raise RuntimeError(f"{id} already registered")
+        self._rpc_ids[id] = rpc
+
     """
     async def _send(
         self,
@@ -98,18 +113,18 @@ class Schema:
 
 
 class _PeerConnection:
-    ingress_map: Mapping[int, str]
-    egress_map: Mapping[int, str]
+    ingress_rpcs: Mapping[int, str]
+    egress_rpcs: Mapping[int, str]
 
-    def __init__(self, schema: Schema):
+    def __init__(self, schema: Schema, rpc_ids: Iterable[str]):
         self.ingress_ready = Event()
         self.egress_ready = Event()
-        self.ingress_map = {}
-        self.egress_map = {}
+        self.ingress_rpcs = {}
+        self.egress_rpcs = dict(enumerate(rpc_ids))
 
     def emit_preamble(self) -> bytes:
         return json.dumps(
-            {"egress_map": {v: k for k, v in self.egress_map.items()}}, separators=(",", ":")
+            {"rpcs": {v: k for k, v in self.egress_rpcs.items()}}, separators=(",", ":")
         ).encode("utf-8")
 
     def load_preamble(self, payload: bytes) -> None:
@@ -125,19 +140,19 @@ class _PeerConnection:
             return
 
         try:
-            egress_map = info["egress_map"]
+            rpcs = info["rpcs"]
         except KeyError:
-            log.warning(f"ignoring corrupt payload: egress_map not found")
+            log.warning(f"ignoring corrupt payload: rpcs not found")
             return
-        if not isinstance(egress_map, dict):
-            log.warning(f"ignoring corrupt payload: egress_map is not a dictionary")
+        if not isinstance(rpcs, dict):
+            log.warning(f"ignoring corrupt payload: rpcs is not a dictionary")
             return
-        for k, v in egress_map.items():
+        for k, v in rpcs.items():
             if type(v) is not int:
-                log.warning(f"ignoring corrupt payload: egress_map value is not an integer")
+                log.warning(f"ignoring corrupt payload: rpcs value is not an integer")
                 return
 
-        self.ingress_map = {v: k for k, v in egress_map.items()}
+        self.ingress_rpcs = {v: k for k, v in rpcs.items()}
         self.ingress_ready.set()
 
 
@@ -148,6 +163,33 @@ def connect(transport: Transport, schema: Schema) -> Generator[None, None, None]
     yield
     schema._transport = None
     transport._schema = None
+
+
+class _SchemaRegister:
+    def __init__(self, schema: Schema, channel: Channel | None, local: bool) -> None:
+        self._schema = schema
+        self._channel = channel
+        self._local = local
+
+    def __call__(self, callback: Callable[_P, Awaitable[None]]) -> Callable[_P, Awaitable[None]]:
+        return _Rpc(self._schema, callback, self._channel, self._local)  # type: ignore
+
+
+class _Rpc(Generic[_P]):
+    def __init__(
+        self,
+        schema: Schema,
+        callback: Callable[_P, Awaitable[None]],
+        channel: Channel | None,
+        local: bool,
+    ):
+        self._id = callback.__qualname__
+        self._callback = callback
+        self._channel = channel
+        self._local = local
+
+        self._schema = schema
+        schema._register_rpc(self._id, self)
 
 
 """
