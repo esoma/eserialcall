@@ -47,22 +47,6 @@ class Transport(ABC):
         await self._schema._remove_peer(peer)
 
 
-class NoOpTransport(Transport):
-    async def send(
-        self, channel: Channel | None, payload: bytes, peers: Sequence[Peer] | None
-    ) -> None:
-        pass
-
-    async def receive(self, peer: Peer, payload: bytes) -> None:
-        pass
-
-    async def add_peer(self, peer: Peer) -> None:
-        pass
-
-    async def remove_peer(self, peer: Peer) -> None:
-        pass
-
-
 class Schema:
     _PREAMBLE_ACK: Final = b""
     _transport: Transport | None = None
