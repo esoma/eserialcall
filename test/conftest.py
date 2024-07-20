@@ -1,9 +1,13 @@
+# eevent
+from eserialcall import rpc as global_rpc
+
 # pytest
 import pytest
 
 # python
 import asyncio
 import gc
+from unittest.mock import patch
 
 
 @pytest.fixture
@@ -33,3 +37,12 @@ def cleanup_event_loop():
         gc.collect()
 
     return _
+
+
+@pytest.fixture
+def rpc(event_loop):
+    transport = global_rpc.transport
+    with patch.object(global_rpc, "_registrations", dict(global_rpc._registrations)):
+        yield global_rpc
+    global_rpc.transport = transport
+    gc.collect()
